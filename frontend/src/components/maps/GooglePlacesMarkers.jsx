@@ -6,11 +6,11 @@ import NGOPinIcon from './NGOPinIcon';
  * GooglePlacesMarkers
  *
  * Renders markers for real non-profit organizations discovered via the
- * Google Places API (New) searchByText with STRICT type filtering:
- * includedType = "non_profit_organization", useStrictTypeFiltering = true.
+ * Google Places API (New) searchByText.
  *
- * Uses the SAME NGOPinIcon as FoodBridge registered NGOs — no visual
- * distinction between the two data sources on the map.
+ * Accepts an optional `onPlacesDiscovered(places)` callback so the parent
+ * (LiveMapSection) can receive the same results and populate the right-hand
+ * NGO list — ensuring map markers and list cards are always synchronized.
  *
  * Must be rendered as a child of <Map> so useMap() works.
  */
@@ -21,7 +21,10 @@ const PLACE_FIELDS = [
   'location',
   'formattedAddress',
   'googleMapsURI',
-  'types'
+  'types',
+  'rating',
+  'userRatingCount',
+  'nationalPhoneNumber'
 ];
 
 /**
@@ -61,8 +64,53 @@ const isDuplicateOfFoodBridgeNGO = (place, foodBridgeNGOs) => {
   return false;
 };
 
+const getPlacePosition = (place) => {
+  if (!place?.location) return null;
+  const lat = typeof place.location.lat === 'function' ? place.location.lat() : place.location.lat;
+  const lng = typeof place.location.lng === 'function' ? place.location.lng() : place.location.lng;
+  if (lat != null && lng != null && !isNaN(lat) && !isNaN(lng)) {
+    return { lat, lng };
+  }
+  return null;
+};
 
-const GooglePlacesMarkers = ({ foodBridgeNGOs = [] }) => {
+const getDisplayName = (place) => {
+  if (!place?.displayName) return 'Organization';
+  if (typeof place.displayName === 'string') return place.displayName;
+  if (place.displayName.text) return place.displayName.text;
+  return 'Organization';
+};
+
+/**
+ * Normalize a raw Google Place object into the shared NGO structure
+ * that LiveMapSection / ngoDiscovery.service uses.
+ */
+const normalizePlaceToNgo = (place) => {
+  const pos = getPlacePosition(place);
+  if (!pos) return null;
+  const name = getDisplayName(place);
+  return {
+    id: place.id || `place-${pos.lat}-${pos.lng}`,
+    name,
+    organizationName: name,
+    latitude: pos.lat,
+    longitude: pos.lng,
+    lat: pos.lat,
+    lng: pos.lng,
+    address: place.formattedAddress || 'Local Area',
+    phone: place.nationalPhoneNumber || '',
+    rating: place.rating || null,
+    reviews: place.userRatingCount || null,
+    googleMapsURI: place.googleMapsURI || `https://www.google.com/maps/search/?api=1&query=${pos.lat},${pos.lng}`,
+    types: place.types || [],
+    source: 'google_places',
+    isVerified: false,
+    distanceKm: null // will be computed by parent if needed
+  };
+};
+
+
+const GooglePlacesMarkers = ({ foodBridgeNGOs = [], onPlacesDiscovered = null }) => {
   const map = useMap();
   const [places, setPlaces] = useState([]);
   const [selectedPlace, setSelectedPlace] = useState(null);
@@ -89,16 +137,15 @@ const GooglePlacesMarkers = ({ foodBridgeNGOs = [] }) => {
       const { Place } = await window.google.maps.importLibrary('places');
 
       if (!Place?.searchByText) {
-        console.error('[GOOGLE PLACES] Place.searchByText is not available. Ensure Places API (New) is enabled in Google Cloud Console.');
+        console.error('[GOOGLE PLACES] Place.searchByText not available.');
         setError('Google Places API (New) is not available.');
         return;
       }
 
-      // ONE controlled search with strict non_profit_organization type
       const request = {
-        textQuery: 'non profit organization',
+        textQuery: 'non profit organization NGO food bank charitable trust',
         includedType: 'non_profit_organization',
-        useStrictTypeFiltering: true,
+        useStrictTypeFiltering: false,
         fields: PLACE_FIELDS,
         locationRestriction: map.getBounds(),
         maxResultCount: 20,
@@ -109,58 +156,46 @@ const GooglePlacesMarkers = ({ foodBridgeNGOs = [] }) => {
       const response = await Place.searchByText(request);
       const rawPlaces = response?.places || [];
 
-      console.log(`[GOOGLE PLACES] Raw results: ${rawPlaces.length}`);
+      console.log(`[GOOGLE PLACES] Raw results from map context: ${rawPlaces.length}`);
 
-      // SECOND safety filter: only accept places with non_profit_organization type
-      const ngoPlaces = rawPlaces.filter(place => {
-        if (!place?.location) return false;
-        const types = place.types || [];
-        return types.includes('non_profit_organization');
-      });
+      // Filter out places without a valid location
+      const withLocation = rawPlaces.filter((p) => getPlacePosition(p) !== null);
 
-      console.log(`[GOOGLE PLACES] After non_profit_organization filter: ${ngoPlaces.length}`);
-
-      // Filter out duplicates that overlap with FoodBridge NGOs
-      const filtered = ngoPlaces.filter(
+      // Deduplicate against FoodBridge NGOs
+      const filtered = withLocation.filter(
         (place) => !isDuplicateOfFoodBridgeNGO(place, foodBridgeNGOs)
       );
 
-      console.log(`[GOOGLE PLACES] After FoodBridge dedup: ${filtered.length}`);
+      console.log(`[GOOGLE PLACES] After dedup: ${filtered.length}`);
 
       setPlaces(filtered);
+
+      // Normalize and bubble up to parent so the list stays in sync
+      if (onPlacesDiscovered) {
+        const normalized = filtered.map(normalizePlaceToNgo).filter(Boolean);
+        if (normalized.length > 0) {
+          console.log(`[GOOGLE PLACES] Bubbling ${normalized.length} places to parent list`);
+          onPlacesDiscovered(normalized);
+        }
+      }
     } catch (err) {
       console.error('[GOOGLE PLACES NGO SEARCH ERROR]', err);
       setError('Nearby Google Maps organizations could not be loaded.');
     }
-  }, [map, foodBridgeNGOs]);
+  }, [map, foodBridgeNGOs, onPlacesDiscovered]);
 
+  // Reset and re-search whenever map or foodBridgeNGOs change
   useEffect(() => {
     if (!map) return;
     searchDoneRef.current = false;
+    setPlaces([]);
 
     const timer = setTimeout(() => {
       searchPlaces();
-    }, 1000);
+    }, 1200);
 
     return () => clearTimeout(timer);
   }, [map, searchPlaces]);
-
-  const getPlacePosition = (place) => {
-    if (!place?.location) return null;
-    const lat = typeof place.location.lat === 'function' ? place.location.lat() : place.location.lat;
-    const lng = typeof place.location.lng === 'function' ? place.location.lng() : place.location.lng;
-    if (lat != null && lng != null && !isNaN(lat) && !isNaN(lng)) {
-      return { lat, lng };
-    }
-    return null;
-  };
-
-  const getDisplayName = (place) => {
-    if (!place?.displayName) return 'Organization';
-    if (typeof place.displayName === 'string') return place.displayName;
-    if (place.displayName.text) return place.displayName.text;
-    return 'Organization';
-  };
 
   return (
     <>
@@ -183,7 +218,6 @@ const GooglePlacesMarkers = ({ foodBridgeNGOs = [] }) => {
         </div>
       )}
 
-      {/* NGO markers — uses the SAME NGOPinIcon as FoodBridge markers */}
       {places.map((place) => {
         const position = getPlacePosition(place);
         if (!position) return null;
@@ -201,7 +235,6 @@ const GooglePlacesMarkers = ({ foodBridgeNGOs = [] }) => {
         );
       })}
 
-      {/* InfoWindow for selected NGO */}
       {selectedPlace && getPlacePosition(selectedPlace) && (
         <InfoWindow
           position={getPlacePosition(selectedPlace)}
@@ -253,6 +286,16 @@ const GooglePlacesMarkers = ({ foodBridgeNGOs = [] }) => {
                 lineHeight: 1.4
               }}>
                 {selectedPlace.formattedAddress}
+              </p>
+            )}
+            {selectedPlace.nationalPhoneNumber && (
+              <p style={{ fontSize: '12px', color: '#475569', margin: '0 0 6px 0' }}>
+                📞 {selectedPlace.nationalPhoneNumber}
+              </p>
+            )}
+            {selectedPlace.rating && (
+              <p style={{ fontSize: '12px', color: '#d97706', margin: '0 0 6px 0' }}>
+                ★ {selectedPlace.rating} {selectedPlace.userRatingCount ? `(${selectedPlace.userRatingCount})` : ''}
               </p>
             )}
             {selectedPlace.googleMapsURI && (

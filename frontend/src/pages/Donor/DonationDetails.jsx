@@ -19,7 +19,7 @@ import toast from 'react-hot-toast';
 import {
   FiMapPin, FiBox, FiImage, FiAward, FiAlertCircle, FiInfo,
   FiPhone, FiMail, FiCheckCircle, FiXCircle, FiShield, FiRefreshCw,
-  FiNavigation, FiActivity
+  FiNavigation, FiActivity, FiCheck, FiX
 } from 'react-icons/fi';
 
 const formatMatchScore = (score) => {
@@ -254,38 +254,50 @@ const DonationDetails = () => {
         </Card>
 
         <Card title="NGO Requests" className="lg:col-span-2">
-          {requests.length === 0 ? (
-            <EmptyState title="No requests" description="No NGOs have requested this donation yet." />
-          ) : (
-            <div className="space-y-4">
-              {requests.map((r) => (
-                <div key={r._id || r.id} className="flex items-start justify-between rounded-lg border p-4">
-                  <div>
-                    <div className="text-sm font-semibold">{r.ngoName || r.requestedByName}</div>
-                    <div className="text-sm text-slate-600">{r.message}</div>
-                    <div className="text-xs text-slate-400">Distance: {r.distance || '—'}</div>
+          {(() => {
+            const pendingRequests = requests.filter(
+              (r) => !r.status || r.status === 'PENDING'
+            );
+            return pendingRequests.length === 0 ? (
+              <EmptyState title="No pending requests" description="No NGOs have requested this donation yet." />
+            ) : (
+              <div className="space-y-4">
+                {pendingRequests.map((r) => (
+                  <div key={r._id || r.id} className="flex items-start justify-between rounded-lg border border-slate-200 bg-white p-4 gap-4">
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-semibold text-slate-800">{r.ngoName || r.requestedByName}</div>
+                      <div className="text-sm text-slate-600 mt-0.5">{r.message}</div>
+                      <div className="text-xs text-slate-400 mt-1">Distance: {r.distance || '—'}</div>
+                    </div>
+                    <div className="flex gap-2 shrink-0">
+                      <Button
+                        variant="primary"
+                        onClick={() => handleRespond(r._id || r.id, 'accept')}
+                        loading={respondingId === (r._id || r.id) || respondingTo === (r._id || r.id)}
+                        disabled={respondingId !== null || respondingTo !== null}
+                      >
+                        <FiCheck className="h-4 w-4" />
+                        Accept
+                      </Button>
+                      <button
+                        type="button"
+                        onClick={() => handleRespond(r._id || r.id, 'reject')}
+                        disabled={respondingId !== null || respondingTo !== null}
+                        className="inline-flex items-center justify-center gap-1.5 px-5 py-2.5 rounded-full text-sm font-semibold border-2 border-red-400 bg-white text-red-500 hover:bg-red-50 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed hover:-translate-y-0.5"
+                      >
+                        {(respondingId === (r._id || r.id) || respondingTo === (r._id || r.id)) ? (
+                          <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" /></svg>
+                        ) : (
+                          <FiX className="h-4 w-4" />
+                        )}
+                        Reject
+                      </button>
+                    </div>
                   </div>
-                  <div className="flex gap-2">
-                    <Button
-                      onClick={() => handleRespond(r._id || r.id, 'accept')}
-                      loading={respondingId === (r._id || r.id) || respondingTo === (r._id || r.id)}
-                      disabled={respondingId !== null || respondingTo !== null}
-                    >
-                      Accept
-                    </Button>
-                    <Button
-                      onClick={() => handleRespond(r._id || r.id, 'reject')}
-                      loading={respondingId === (r._id || r.id) || respondingTo === (r._id || r.id)}
-                      disabled={respondingId !== null || respondingTo !== null}
-                      className="bg-white text-red-600 border border-slate-200"
-                    >
-                      Reject
-                    </Button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
+                ))}
+              </div>
+            );
+          })()}
         </Card>
       </div>
 
